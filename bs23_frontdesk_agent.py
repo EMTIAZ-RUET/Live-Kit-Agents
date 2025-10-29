@@ -141,139 +141,290 @@ employee_info_tools = [search_employee, collect_caller_info, send_email]
 job_opportunity_tools = [get_available_positions, collect_caller_info, send_email]
 admin_finance_tools = [collect_caller_info, send_email]
 
-# Simple Node Functions
-def company_info_node(state: State, config: RunnableConfig):
-    """Handle company information queries."""
-    user_query = state["messages"][-1].content.lower()
-    
-    if "service" in user_query:
-        info = COMPANY_DATA["services"]
-    elif "location" in user_query or "address" in user_query:
-        info = COMPANY_DATA["location"]
-    elif "contact" in user_query or "phone" in user_query:
-        info = COMPANY_DATA["contact"]
-    elif "hours" in user_query or "time" in user_query:
-        info = COMPANY_DATA["hours"]
-    else:
-        info = f"{COMPANY_DATA['services']} {COMPANY_DATA['location']} {COMPANY_DATA['contact']}"
-    
-    response = f"Here's the information you requested: {info}"
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+# Bind tools to language model for each sub-agent
+llm_with_company_tools = llm.bind_tools(company_info_tools)
+llm_with_project_tools = llm.bind_tools(project_discussion_tools)
+llm_with_employee_tools = llm.bind_tools(employee_info_tools)
+llm_with_job_tools = llm.bind_tools(job_opportunity_tools)
+llm_with_admin_tools = llm.bind_tools(admin_finance_tools)
 
-def employee_info_node(state: State, config: RunnableConfig):
-    """Handle employee contact requests."""
-    user_query = state["messages"][-1].content.lower()
-    
-    found_employee = None
-    for name, info in EMPLOYEE_DATA.items():
-        if name in user_query:
-            found_employee = info
-            break
-    
-    if found_employee:
-        response = f"I found {found_employee['name']}, who is a {found_employee['title']} in {found_employee['department']}. I can help you connect with them. Please provide your name and purpose for contact."
-    else:
-        response = "I couldn't find that employee. Could you please provide the full name or try a different spelling?"
-    
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+# Create tool nodes for each sub-agent
+company_tool_node = ToolNode(company_info_tools)
+project_tool_node = ToolNode(project_discussion_tools)
+employee_tool_node = ToolNode(employee_info_tools)
+job_tool_node = ToolNode(job_opportunity_tools)
+admin_tool_node = ToolNode(admin_finance_tools)
 
-def job_opportunity_node(state: State, config: RunnableConfig):
-    """Handle job opportunity inquiries."""
-    user_query = state["messages"][-1].content.lower()
+# Prompt generation functions following sample format
+def generate_company_assistant_prompt() -> str:
+    """
+    Generate a system prompt for the company information assistant.
     
-    available_jobs = []
-    for category, jobs in JOB_DATA.items():
-        if category in user_query:
-            available_jobs.extend(jobs)
+    Returns:
+        str: Formatted system prompt for the company assistant
+    """
+    return """
+    You are a member of the Brain Station 23 assistant team, your role specifically is focused on providing accurate company information.
+    You have access to tools that can retrieve information about our services, location, contact details, and working hours.
     
-    if not available_jobs:
-        available_jobs = [job for jobs in JOB_DATA.values() for job in jobs[:2]]
+    CORE RESPONSIBILITIES:
+    - Provide accurate information about Brain Station 23 services and capabilities
+    - Share location and contact information when requested
+    - Inform about working hours and availability
+    - Maintain professional and helpful communication
+    - You are routed only when there are questions related to company information; focus on these queries.
     
-    response = f"Here are some available positions: {', '.join(available_jobs[:5])}. Please send your resume to careers@brainstation-23.com for application."
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+    RESPONSE GUIDELINES:
+    1. Always use the available tools to get the most current information
+    2. Provide complete and accurate details
+    3. Be concise but informative
+    4. If you cannot find specific information, acknowledge this clearly
+    
+    Message history is attached for context.
+    """
 
-def project_discussion_node(state: State, config: RunnableConfig):
-    """Handle project inquiries."""
-    response = "I'd be happy to help with your project inquiry. Please provide your name, company, email, and project details. Our team will contact you within 24 hours."
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+def generate_project_assistant_prompt() -> str:
+    """
+    Generate a system prompt for the project discussion assistant.
+    
+    Returns:
+        str: Formatted system prompt for the project assistant
+    """
+    return """
+    You are a member of the Brain Station 23 assistant team, your role specifically is focused on handling project inquiries and lead generation.
+    You have access to tools for collecting client information, sending emails, and gathering project requirements.
+    
+    CORE RESPONSIBILITIES:
+    - Collect comprehensive project requirements from potential clients
+    - Gather client contact information securely
+    - Forward project inquiries to appropriate team members
+    - Provide initial project guidance and next steps
+    - You are routed only when there are questions related to project discussions; focus on these queries.
+    
+    INFORMATION TO COLLECT:
+    1. Client name and company
+    2. Email address for follow-up
+    3. Project type and requirements
+    4. Timeline and budget considerations
+    5. Technical specifications if available
+    
+    Message history is attached for context.
+    """
 
-def admin_finance_node(state: State, config: RunnableConfig):
-    """Handle admin/finance inquiries."""
-    response = "For administrative, finance, or compliance matters, please provide your contact details and inquiry details. I'll forward this to the appropriate department."
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+def generate_employee_assistant_prompt() -> str:
+    """
+    Generate a system prompt for the employee contact assistant.
+    
+    Returns:
+        str: Formatted system prompt for the employee assistant
+    """
+    return """
+    You are a member of the Brain Station 23 assistant team, your role specifically is focused on facilitating employee connections while maintaining privacy and security.
+    You have access to tools for searching employee information and collecting caller details.
+    
+    CORE RESPONSIBILITIES:
+    - Help callers connect with appropriate Brain Station 23 employees
+    - Protect employee privacy by not sharing direct contact information
+    - Collect caller information for security purposes
+    - Facilitate proper introductions between callers and employees
+    - You are routed only when there are questions related to employee contact; focus on these queries.
+    
+    SECURITY PROTOCOL:
+    1. Never share direct employee contact information
+    2. Always collect caller details before facilitating connections
+    3. Verify the purpose of contact
+    4. Forward connection requests through proper channels
+    
+    Message history is attached for context.
+    """
 
-# Project Discussion Sub-agent
-def project_subagent(state: State, config: RunnableConfig):
-    """Handle project discussion inquiries with lead collection."""
+def generate_job_assistant_prompt() -> str:
+    """
+    Generate a system prompt for the job opportunities assistant.
+    
+    Returns:
+        str: Formatted system prompt for the job assistant
+    """
+    return """
+    You are a member of the Brain Station 23 assistant team, your role specifically is focused on providing career opportunities and guiding job seekers.
+    You have access to tools for retrieving available positions and collecting candidate information.
+    
+    CORE RESPONSIBILITIES:
+    - Provide information about current job openings
+    - Guide candidates through the application process
+    - Collect candidate information and preferences
+    - Direct candidates to appropriate application channels
+    - You are routed only when there are questions related to job opportunities; focus on these queries.
+    
+    APPLICATION GUIDANCE:
+    1. Share relevant open positions based on candidate interests
+    2. Explain application process and requirements
+    3. Collect candidate background information
+    4. Direct to careers@brainstation-23.com for formal applications
+    5. Provide timeline expectations for hiring process
+    
+    Message history is attached for context.
+    """
+
+def generate_admin_assistant_prompt() -> str:
+    """
+    Generate a system prompt for the admin/finance assistant.
+    
+    Returns:
+        str: Formatted system prompt for the admin assistant
+    """
+    return """
+    You are a member of the Brain Station 23 assistant team, your role specifically is focused on handling administrative, finance, and compliance matters.
+    You have access to tools for collecting inquiry details and routing to appropriate departments.
+    
+    CORE RESPONSIBILITIES:
+    - Handle administrative inquiries and route to proper departments
+    - Collect detailed information for finance and billing matters
+    - Manage compliance and regulatory questions
+    - Ensure proper documentation and follow-up
+    - You are routed only when there are questions related to admin/finance/compliance; focus on these queries.
+    
+    ROUTING GUIDELINES:
+    - Finance/Billing: Route to khairahammed01@gmail.com
+    - Compliance/Legal: Route to khair@brainstation-23.com
+    - General Admin: Route to khairahmad6@gmail.com
+    
+    INFORMATION TO COLLECT:
+    1. Caller name and company
+    2. Contact information
+    3. Detailed inquiry description
+    4. Relevant reference numbers or documents
+    5. Urgency level
+    
+    Message history is attached for context.
+    """
+
+# Sub-agent node functions following sample format
+def company_assistant(state: State, config: RunnableConfig):
+    """
+    Company information assistant node that handles company-related queries.
+    
+    Args:
+        state (State): Current state containing messages and other workflow data
+        config (RunnableConfig): Configuration for the runnable execution
+        
+    Returns:
+        dict: Updated state with the assistant's response message
+    """
+    # Generate instructions for the company assistant agent
+    company_assistant_prompt = generate_company_assistant_prompt()
+
+    # Invoke the language model with tools and system prompt
+    response = llm_with_company_tools.invoke([SystemMessage(company_assistant_prompt)] + state["messages"])
+    
+    # Return updated state with the assistant's response
+    return {"messages": [response]}
+
+def project_assistant(state: State, config: RunnableConfig):
+    """
+    Project discussion assistant node that handles project inquiries.
+    
+    Args:
+        state (State): Current state containing messages and other workflow data
+        config (RunnableConfig): Configuration for the runnable execution
+        
+    Returns:
+        dict: Updated state with the assistant's response message
+    """
+    # Generate instructions for the project assistant agent
+    project_assistant_prompt = generate_project_assistant_prompt()
+
+    # Invoke the language model with tools and system prompt
+    response = llm_with_project_tools.invoke([SystemMessage(project_assistant_prompt)] + state["messages"])
+    
+    # Return updated state with the assistant's response
+    return {"messages": [response]}
+
+def employee_assistant(state: State, config: RunnableConfig):
+    """
+    Employee contact assistant node that handles employee connection requests.
+    
+    Args:
+        state (State): Current state containing messages and other workflow data
+        config (RunnableConfig): Configuration for the runnable execution
+        
+    Returns:
+        dict: Updated state with the assistant's response message
+    """
+    # Generate instructions for the employee assistant agent
+    employee_assistant_prompt = generate_employee_assistant_prompt()
+
+    # Invoke the language model with tools and system prompt
+    response = llm_with_employee_tools.invoke([SystemMessage(employee_assistant_prompt)] + state["messages"])
+    
+    # Return updated state with the assistant's response
+    return {"messages": [response]}
+
+def job_assistant(state: State, config: RunnableConfig):
+    """
+    Job opportunities assistant node that handles career inquiries.
+    
+    Args:
+        state (State): Current state containing messages and other workflow data
+        config (RunnableConfig): Configuration for the runnable execution
+        
+    Returns:
+        dict: Updated state with the assistant's response message
+    """
+    # Generate instructions for the job assistant agent
+    job_assistant_prompt = generate_job_assistant_prompt()
+
+    # Invoke the language model with tools and system prompt
+    response = llm_with_job_tools.invoke([SystemMessage(job_assistant_prompt)] + state["messages"])
+    
+    # Return updated state with the assistant's response
+    return {"messages": [response]}
+
+def admin_assistant(state: State, config: RunnableConfig):
+    """
+    Admin/finance assistant node that handles administrative matters.
+    
+    Args:
+        state (State): Current state containing messages and other workflow data
+        config (RunnableConfig): Configuration for the runnable execution
+        
+    Returns:
+        dict: Updated state with the assistant's response message
+    """
+    # Generate instructions for the admin assistant agent
+    admin_assistant_prompt = generate_admin_assistant_prompt()
+
+    # Invoke the language model with tools and system prompt
+    response = llm_with_admin_tools.invoke([SystemMessage(admin_assistant_prompt)] + state["messages"])
+    
+    # Return updated state with the assistant's response
+    return {"messages": [response]}
+
+# Conditional edge function for ReAct pattern
+def should_continue(state: State, config: RunnableConfig):
+    """
+    Conditional edge function that determines the next step in the ReAct agent workflow.
+    
+    Args:
+        state (State): Current state containing messages and other workflow data
+        config (RunnableConfig): Configuration for the runnable execution
+        
+    Returns:
+        str: Either "continue" to execute tools or "end" to finish the workflow
+    """
+    # Get all messages from the current state
     messages = state["messages"]
-    user_query = messages[-1].content.lower()
     
-    # Check if this is initial project inquiry
-    if any(keyword in user_query for keyword in ["project", "development", "hire", "build", "software"]):
-        response = "I'd be happy to help with your project inquiry! To better assist you, I'll need some information. Could you please provide:\n\n1. Your name and company\n2. Your email address\n3. Project type and requirements\n4. Timeline and budget range\n\nOur team will review your requirements and contact you within 24 hours."
-        return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+    # Examine the most recent message to check for tool calls
+    last_message = messages[-1]
     
-    # If user is providing information, collect it
-    response = "Thank you for the information. I'm forwarding your project inquiry to our team at khairahmad6@gmail.com. You can expect to hear from us within 24 hours with next steps."
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
-
-# Employee Information Sub-agent
-def employee_subagent(state: State, config: RunnableConfig):
-    """Handle employee contact requests with privacy protection."""
-    user_query = state["messages"][-1].content.lower()
-    
-    # Search for employee in the query
-    found_employee = None
-    for name, info in EMPLOYEE_DATA.items():
-        if name in user_query or any(part in user_query for part in name.split()):
-            found_employee = info
-            break
-    
-    if found_employee:
-        response = f"I found {found_employee['name']}, who is a {found_employee['title']} in {found_employee['department']}. For security reasons, I cannot share direct contact information. However, I can help you connect with them.\n\nPlease provide:\n1. Your name\n2. Your email address\n3. Purpose of contact\n\nI'll forward your message to {found_employee['name']} and they will contact you directly."
+    # If the last message doesn't contain any tool calls, the agent is done
+    if not last_message.tool_calls:
+        return "end"
+    # If there are tool calls present, continue to execute them
     else:
-        response = "I couldn't find that employee in our directory. Could you please provide the full name or check the spelling? Alternatively, you can describe the department or role you're looking for."
-    
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
+        return "continue"
 
-# Job Opportunity Sub-agent
-def job_subagent(state: State, config: RunnableConfig):
-    """Handle job opportunity inquiries and candidate guidance."""
-    user_query = state["messages"][-1].content.lower()
-    
-    # Find relevant job categories
-    available_jobs = []
-    for category, jobs in JOB_DATA.items():
-        if category in user_query:
-            available_jobs.extend(jobs)
-    
-    if not available_jobs:
-        # Show general available positions
-        available_jobs = [job for jobs in JOB_DATA.values() for job in jobs[:2]]
-    
-    response = f"Great to hear about your interest in joining Brain Station 23! Here are some current openings:\n\n{', '.join(available_jobs[:5])}\n\nTo apply, please send your resume to careers@brainstation-23.com with the position title in the subject line.\n\nIf you'd like to discuss your background and interests, please share:\n1. Your name and current role\n2. Years of experience\n3. Preferred technology stack\n4. Career goals\n\nOur HR team will review your application and get back to you soon!"
-    
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
-
-# Admin/Finance/Compliance Sub-agent
-def admin_subagent(state: State, config: RunnableConfig):
-    """Handle administrative, finance, and compliance inquiries."""
-    user_query = state["messages"][-1].content.lower()
-    
-    # Determine the type of inquiry
-    if any(keyword in user_query for keyword in ["finance", "billing", "payment", "invoice"]):
-        department = "Finance"
-        email = "khairahammed01@gmail.com"
-    elif any(keyword in user_query for keyword in ["compliance", "legal", "regulation"]):
-        department = "Compliance"
-        email = "khair@brainstation-23.com"
-    else:
-        department = "Administration"
-        email = "khairahmad6@gmail.com"
-    
-    response = f"I'll help you with your {department.lower()} inquiry. To ensure your request is handled properly, please provide:\n\n1. Your name and company (if applicable)\n2. Your email address\n3. Detailed description of your inquiry\n4. Any relevant reference numbers or documents\n\nI'll forward your request to our {department} team at {email}, and they will contact you within 1-2 business days."
-    
-    return {"messages": [SystemMessage(content=response)], "current_intent": "complete"}
 
 # Supervisor Agent for Multi-Agent Orchestration
 supervisor_prompt = """You are Sabnam, the expert virtual receptionist and supervisor for Brain Station 23.
@@ -297,45 +448,135 @@ This could involve multiple sub-agent calls for complex inquiries.
 """
 
 
-# Create sub-agent workflows following sample format
+# Create sub-agent workflows following sample format with ReAct pattern
 def create_company_subagent():
-    """Create company information sub-agent."""
+    """Create company information sub-agent with ReAct pattern."""
     workflow = StateGraph(State)
-    workflow.add_node("company_info", company_info_node)
-    workflow.add_edge(START, "company_info")
-    workflow.add_edge("company_info", END)
+    
+    # Add nodes to the graph
+    workflow.add_node("company_assistant", company_assistant)
+    workflow.add_node("company_tool_node", company_tool_node)
+    
+    # Set entry point
+    workflow.add_edge(START, "company_assistant")
+    
+    # Add conditional edge from assistant based on whether tools need to be called
+    workflow.add_conditional_edges(
+        "company_assistant",
+        should_continue,
+        {
+            "continue": "company_tool_node",
+            "end": END,
+        },
+    )
+    
+    # After tool execution, return to assistant
+    workflow.add_edge("company_tool_node", "company_assistant")
+    
     return workflow.compile(name="company_subagent", checkpointer=checkpointer, store=in_memory_store)
 
 def create_project_subagent():
-    """Create project discussion sub-agent."""
+    """Create project discussion sub-agent with ReAct pattern."""
     workflow = StateGraph(State)
-    workflow.add_node("project_discussion", project_subagent)
-    workflow.add_edge(START, "project_discussion")
-    workflow.add_edge("project_discussion", END)
+    
+    # Add nodes to the graph
+    workflow.add_node("project_assistant", project_assistant)
+    workflow.add_node("project_tool_node", project_tool_node)
+    
+    # Set entry point
+    workflow.add_edge(START, "project_assistant")
+    
+    # Add conditional edge from assistant based on whether tools need to be called
+    workflow.add_conditional_edges(
+        "project_assistant",
+        should_continue,
+        {
+            "continue": "project_tool_node",
+            "end": END,
+        },
+    )
+    
+    # After tool execution, return to assistant
+    workflow.add_edge("project_tool_node", "project_assistant")
+    
     return workflow.compile(name="project_subagent", checkpointer=checkpointer, store=in_memory_store)
 
 def create_employee_subagent():
-    """Create employee information sub-agent."""
+    """Create employee information sub-agent with ReAct pattern."""
     workflow = StateGraph(State)
-    workflow.add_node("employee_info", employee_subagent)
-    workflow.add_edge(START, "employee_info")
-    workflow.add_edge("employee_info", END)
+    
+    # Add nodes to the graph
+    workflow.add_node("employee_assistant", employee_assistant)
+    workflow.add_node("employee_tool_node", employee_tool_node)
+    
+    # Set entry point
+    workflow.add_edge(START, "employee_assistant")
+    
+    # Add conditional edge from assistant based on whether tools need to be called
+    workflow.add_conditional_edges(
+        "employee_assistant",
+        should_continue,
+        {
+            "continue": "employee_tool_node",
+            "end": END,
+        },
+    )
+    
+    # After tool execution, return to assistant
+    workflow.add_edge("employee_tool_node", "employee_assistant")
+    
     return workflow.compile(name="employee_subagent", checkpointer=checkpointer, store=in_memory_store)
 
 def create_job_subagent():
-    """Create job opportunity sub-agent."""
+    """Create job opportunity sub-agent with ReAct pattern."""
     workflow = StateGraph(State)
-    workflow.add_node("job_info", job_subagent)
-    workflow.add_edge(START, "job_info")
-    workflow.add_edge("job_info", END)
+    
+    # Add nodes to the graph
+    workflow.add_node("job_assistant", job_assistant)
+    workflow.add_node("job_tool_node", job_tool_node)
+    
+    # Set entry point
+    workflow.add_edge(START, "job_assistant")
+    
+    # Add conditional edge from assistant based on whether tools need to be called
+    workflow.add_conditional_edges(
+        "job_assistant",
+        should_continue,
+        {
+            "continue": "job_tool_node",
+            "end": END,
+        },
+    )
+    
+    # After tool execution, return to assistant
+    workflow.add_edge("job_tool_node", "job_assistant")
+    
     return workflow.compile(name="job_subagent", checkpointer=checkpointer, store=in_memory_store)
 
 def create_admin_subagent():
-    """Create admin/finance sub-agent."""
+    """Create admin/finance sub-agent with ReAct pattern."""
     workflow = StateGraph(State)
-    workflow.add_node("admin_info", admin_subagent)
-    workflow.add_edge(START, "admin_info")
-    workflow.add_edge("admin_info", END)
+    
+    # Add nodes to the graph
+    workflow.add_node("admin_assistant", admin_assistant)
+    workflow.add_node("admin_tool_node", admin_tool_node)
+    
+    # Set entry point
+    workflow.add_edge(START, "admin_assistant")
+    
+    # Add conditional edge from assistant based on whether tools need to be called
+    workflow.add_conditional_edges(
+        "admin_assistant",
+        should_continue,
+        {
+            "continue": "admin_tool_node",
+            "end": END,
+        },
+    )
+    
+    # After tool execution, return to assistant
+    workflow.add_edge("admin_tool_node", "admin_assistant")
+    
     return workflow.compile(name="admin_subagent", checkpointer=checkpointer, store=in_memory_store)
 
 # Create individual sub-agents
