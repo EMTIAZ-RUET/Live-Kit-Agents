@@ -1,0 +1,10 @@
+livekit-agents
+livekit-plugins-deepgram
+livekit-plugins-groq
+livekit-plugins-silero
+livekit-plugins-langchain
+python-dotenv
+langchain-groq
+langgraph
+langchain-core
+langchain
