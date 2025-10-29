@@ -9,9 +9,11 @@ from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import START, END, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.managed.is_last_step import RemainingSteps
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
 from langgraph.store.memory import InMemoryStore
+from langgraph_supervisor import create_supervisor
 
 from livekit.agents import (
     Agent,
@@ -60,6 +62,7 @@ class State(TypedDict):
     """State schema for the BS23 frontdesk workflow."""
     messages: Annotated[list[AnyMessage], add_messages]
     current_intent: str
+    remaining_steps: RemainingSteps
 
 # Company Information Tools
 @tool
@@ -293,107 +296,75 @@ Based on the conversation context, determine which sub-agent should handle the n
 This could involve multiple sub-agent calls for complex inquiries.
 """
 
-# Create supervisor using a simple routing approach (following sample format)
-def create_supervisor_agent():
-    """Create supervisor agent for routing to sub-agents."""
-    
-    def supervisor_node(state: State, config: RunnableConfig):
-        """Supervisor node that routes to appropriate sub-agents."""
-        
-        # Welcome message for first interaction
-        if len(state["messages"]) == 1:
-            welcome_msg = "Thank you for calling Brain Station 23. This is Sabnam, how may I help you today?"
-            return {"messages": [SystemMessage(content=welcome_msg)], "current_intent": "greeting"}
-        
-        # Analyze intent and route to appropriate sub-agent
-        last_message = state["messages"][-1].content.lower()
-        
-        # Determine routing based on keywords and context
-        if any(keyword in last_message for keyword in ["service", "company", "location", "contact", "hours", "about"]):
-            intent = "company_info"
-        elif any(keyword in last_message for keyword in ["project", "development", "hire", "build", "software"]):
-            intent = "project_discussion"
-        elif any(keyword in last_message for keyword in ["employee", "staff", "person", "contact", "speak to"]):
-            intent = "employee_information"
-        elif any(keyword in last_message for keyword in ["job", "career", "position", "hiring", "work", "apply"]):
-            intent = "job_opportunity"
-        elif any(keyword in last_message for keyword in ["admin", "finance", "billing", "compliance", "payment"]):
-            intent = "admin_finance"
-        else:
-            # Ask for clarification
-            clarification_msg = "I'd be happy to help you! Could you please let me know if you're looking for information about our company, discussing a project, contacting an employee, exploring job opportunities, or handling administrative matters?"
-            return {"messages": [SystemMessage(content=clarification_msg)], "current_intent": "clarify"}
-        
-        return {"current_intent": intent}
-    
-    return supervisor_node
 
-supervisor_agent = create_supervisor_agent()
+# Create sub-agent workflows following sample format
+def create_company_subagent():
+    """Create company information sub-agent."""
+    workflow = StateGraph(State)
+    workflow.add_node("company_info", company_info_node)
+    workflow.add_edge(START, "company_info")
+    workflow.add_edge("company_info", END)
+    return workflow.compile(name="company_subagent", checkpointer=checkpointer, store=in_memory_store)
 
-# Routing function for conditional edges
-def route_to_subagent(state: State, config: RunnableConfig):
-    """Route to appropriate sub-agent based on intent."""
-    intent = state.get("current_intent", "")
-    
-    if intent == "company_info":
-        return "company_subagent"
-    elif intent == "project_discussion":
-        return "project_subagent"
-    elif intent == "employee_information":
-        return "employee_subagent"
-    elif intent == "job_opportunity":
-        return "job_subagent"
-    elif intent == "admin_finance":
-        return "admin_subagent"
-    elif intent == "complete":
-        return "end"
-    else:
-        return "supervisor"
+def create_project_subagent():
+    """Create project discussion sub-agent."""
+    workflow = StateGraph(State)
+    workflow.add_node("project_discussion", project_subagent)
+    workflow.add_edge(START, "project_discussion")
+    workflow.add_edge("project_discussion", END)
+    return workflow.compile(name="project_subagent", checkpointer=checkpointer, store=in_memory_store)
 
-# Create Multi-Agent Workflow with Supervisor Architecture
+def create_employee_subagent():
+    """Create employee information sub-agent."""
+    workflow = StateGraph(State)
+    workflow.add_node("employee_info", employee_subagent)
+    workflow.add_edge(START, "employee_info")
+    workflow.add_edge("employee_info", END)
+    return workflow.compile(name="employee_subagent", checkpointer=checkpointer, store=in_memory_store)
+
+def create_job_subagent():
+    """Create job opportunity sub-agent."""
+    workflow = StateGraph(State)
+    workflow.add_node("job_info", job_subagent)
+    workflow.add_edge(START, "job_info")
+    workflow.add_edge("job_info", END)
+    return workflow.compile(name="job_subagent", checkpointer=checkpointer, store=in_memory_store)
+
+def create_admin_subagent():
+    """Create admin/finance sub-agent."""
+    workflow = StateGraph(State)
+    workflow.add_node("admin_info", admin_subagent)
+    workflow.add_edge(START, "admin_info")
+    workflow.add_edge("admin_info", END)
+    return workflow.compile(name="admin_subagent", checkpointer=checkpointer, store=in_memory_store)
+
+# Create individual sub-agents
+company_subagent_workflow = create_company_subagent()
+project_subagent_workflow = create_project_subagent()
+employee_subagent_workflow = create_employee_subagent()
+job_subagent_workflow = create_job_subagent()
+admin_subagent_workflow = create_admin_subagent()
+
+# Create supervisor workflow using LangGraph's pre-built supervisor
+# The supervisor coordinates between multiple subagents based on the incoming queries
+supervisor_workflow = create_supervisor(
+    agents=[company_subagent_workflow, project_subagent_workflow, employee_subagent_workflow, job_subagent_workflow, admin_subagent_workflow],  # List of subagents to supervise
+    output_mode="last_message",  # Return only the final response (alternative: "full_history")
+    model=llm,  # Language model for supervisor reasoning and routing decisions
+    prompt=(supervisor_prompt),  # System instructions for the supervisor agent
+    state_schema=State  # State schema defining data flow structure
+)
+
+# Compile the supervisor workflow with memory components
+# - checkpointer: Enables short-term memory within conversation threads
+# - store: Provides long-term memory storage across conversations
 def create_bs23_frontdesk_graph():
     """Create the BS23 frontdesk multi-agent graph following sample format."""
-    
-    # Create main workflow StateGraph
-    workflow = StateGraph(State)
-    
-    # Add supervisor node
-    workflow.add_node("supervisor", supervisor_agent)
-    
-    # Add all sub-agent nodes
-    workflow.add_node("company_subagent", company_info_node)
-    workflow.add_node("project_subagent", project_subagent)
-    workflow.add_node("employee_subagent", employee_subagent)
-    workflow.add_node("job_subagent", job_subagent)
-    workflow.add_node("admin_subagent", admin_subagent)
-    
-    # Set entry point to supervisor
-    workflow.add_edge(START, "supervisor")
-    
-    # Add conditional routing from supervisor to sub-agents
-    workflow.add_conditional_edges(
-        "supervisor",
-        route_to_subagent,
-        {
-            "company_subagent": "company_subagent",
-            "project_subagent": "project_subagent",
-            "employee_subagent": "employee_subagent",
-            "job_subagent": "job_subagent",
-            "admin_subagent": "admin_subagent",
-            "supervisor": "supervisor",
-            "end": END
-        }
+    return supervisor_workflow.compile(
+        name="bs23_frontdesk_supervisor", 
+        checkpointer=checkpointer, 
+        store=in_memory_store
     )
-    
-    # All sub-agents return to END after completion
-    workflow.add_edge("company_subagent", END)
-    workflow.add_edge("project_subagent", END)
-    workflow.add_edge("employee_subagent", END)
-    workflow.add_edge("job_subagent", END)
-    workflow.add_edge("admin_subagent", END)
-    
-    # Compile without checkpointer for LiveKit compatibility
-    return workflow.compile()
 
 def prewarm(proc: JobProcess):
     """Preload components for faster startup."""
