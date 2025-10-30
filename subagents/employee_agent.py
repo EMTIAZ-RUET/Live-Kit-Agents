@@ -48,38 +48,44 @@ def should_continue(state, config: RunnableConfig):
         return "continue"
 
 def create_employee_subagent(llm, checkpointer: MemorySaver, store: InMemoryStore, state_schema):
-    """Create employee information sub-agent with ReAct pattern."""
+    """Create LiveKit-compatible employee sub-agent (no tools to prevent hanging)."""
     
-    # Bind tools to LLM
-    llm_with_employee_tools = llm.bind_tools(employee_tools_combined)
+    def employee_node(state):
+        """Simple employee assistant without tools (LiveKit compatible)."""
+        messages = state["messages"]
+        
+        # Employee knowledge embedded in prompt (no tools needed)
+        employee_prompt = """You are the Employee Contact Specialist for Brain Station 23.
+You help callers connect with employees and provide employee information.
+
+EMPLOYEE DIRECTORY:
+- John Doe: Senior Developer, Engineering Department, john.doe@brainstation-23.com
+- Jane Smith: Project Manager, Operations Department, jane.smith@brainstation-23.com  
+- Ahmed Hassan: HR Manager, Human Resources Department, ahmed.hassan@brainstation-23.com
+- David Johnson: Senior Developer, Engineering Department, john.doe@brainstation-23.com
+
+SECURITY PROTOCOL:
+- Always collect caller information before connecting to employees
+- Ask for: caller name, company, purpose of contact
+- For security, verify the request is legitimate
+
+RESPONSES:
+- Provide employee information when requested
+- Offer to connect callers to appropriate employees
+- Collect caller details for security purposes
+- Be professional and helpful
+
+Handle employee-related requests professionally and securely."""
+        
+        # Create enhanced messages with employee context
+        enhanced_messages = [{"role": "system", "content": employee_prompt}] + messages
+        response = llm.invoke(enhanced_messages)
+        return {"messages": [response]}
     
-    # Create tool node
-    employee_tool_node = ToolNode(employee_tools_combined)
-    
-    # Create wrapper function with bound LLM
-    def employee_assistant_wrapper(state, config: RunnableConfig):
-        return employee_assistant(state, config, llm_with_employee_tools)
-    
+    # Simple StateGraph like working langraph_implementation.py (no tools, no conditional edges)
     workflow = StateGraph(state_schema)
-    
-    # Add nodes to the graph
-    workflow.add_node("employee_assistant", employee_assistant_wrapper)
-    workflow.add_node("employee_tool_node", employee_tool_node)
-    
-    # Set entry point
+    workflow.add_node("employee_assistant", employee_node)
     workflow.add_edge(START, "employee_assistant")
     
-    # Add conditional edge from assistant based on whether tools need to be called
-    workflow.add_conditional_edges(
-        "employee_assistant",
-        should_continue,
-        {
-            "continue": "employee_tool_node",
-            "end": END,
-        },
-    )
-    
-    # After tool execution, return to assistant
-    workflow.add_edge("employee_tool_node", "employee_assistant")
-    
-    return workflow.compile(name="employee_subagent", checkpointer=checkpointer, store=store)
+    # Simple compile without checkpointer for LiveKit compatibility
+    return workflow.compile()

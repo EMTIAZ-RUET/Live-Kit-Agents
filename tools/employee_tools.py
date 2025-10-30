@@ -6,7 +6,8 @@ from langchain_core.tools import tool
 EMPLOYEE_DATA = {
     "john doe": {"name": "John Doe", "title": "Senior Developer", "department": "Engineering", "email": "john.doe@brainstation-23.com"},
     "jane smith": {"name": "Jane Smith", "title": "Project Manager", "department": "Operations", "email": "jane.smith@brainstation-23.com"},
-    "ahmed hassan": {"name": "Ahmed Hassan", "title": "HR Manager", "department": "Human Resources", "email": "ahmed.hassan@brainstation-23.com"}
+    "ahmed hassan": {"name": "Ahmed Hassan", "title": "HR Manager", "department": "Human Resources", "email": "ahmed.hassan@brainstation-23.com"},
+    "David Jhonson": {"name": "John Doe", "title": "Senior Developer", "department": "Engineering", "email": "john.doe@brainstation-23.com"},
 }
 
 @tool
